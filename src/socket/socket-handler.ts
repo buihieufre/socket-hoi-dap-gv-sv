@@ -45,12 +45,17 @@ export function setupSocketHandlers(io: IOServer) {
     console.log("[Socket] New connection attempt, socket ID:", socket.id);
     console.log("[Socket] Cookies present:", !!socket.handshake.headers.cookie);
 
-    // Auth via cookie token
+    // Auth via cookie token (fallback to auth/query/header)
     try {
       const cookie = socket.handshake.headers.cookie || "";
-      const token = getTokenFromCookies(cookie);
+      const tokenFromCookie = getTokenFromCookies(cookie);
+      const tokenFromAuth = (socket.handshake.auth && socket.handshake.auth.token) || undefined;
+      const tokenFromQuery = socket.handshake.query?.token;
+      const authHeader = socket.handshake.headers.authorization;
+      const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : undefined;
+      const token = tokenFromCookie || tokenFromAuth || tokenFromQuery || tokenFromHeader;
       if (!token) {
-        console.error("[Socket] No token found in cookies");
+        console.error("[Socket] No token found (cookie/auth/query/header)");
         throw new Error("NO_TOKEN");
       }
       const payload = verifyToken(token);
