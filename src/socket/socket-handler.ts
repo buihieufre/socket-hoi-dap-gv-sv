@@ -1,7 +1,7 @@
 import { Server as IOServer } from "socket.io";
-import { prisma } from "@/config/database";
-import { getTokenFromCookies, verifyToken } from "@/config/auth";
-import { sendFcmMessage } from "@/config/firebase";
+import { prisma } from "../config/database";
+import { getTokenFromCookies, verifyToken } from "../config/auth";
+import { sendFcmMessage } from "../config/firebase";
 
 // Track emitted notifications to prevent duplicates
 const emittedNotifications = new Set<string>();
