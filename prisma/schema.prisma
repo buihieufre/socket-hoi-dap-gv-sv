@@ -1,0 +1,419 @@
+// Prisma Schema
+// MongoDB database schema for Q&A System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User Entity
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  fullName  String
+  role      UserRole @default(STUDENT)
+  studentId String?  @unique
+  advisorId String?  @unique
+
+  // Relations
+  questions          Question[]
+  answers            Answer[]
+  comments           Comment[]
+  votes              Vote[]
+  notifications      Notification[]
+  questionViews      QuestionView[]
+  sentMessages       QuestionMessage[]        @relation("UserSentMessages")
+  messageReceipts    QuestionMessageReceipt[] @relation("UserMessageReceipts")
+  notificationTokens NotificationToken[]
+  watchedQuestions   QuestionWatcher[]        @relation("UserWatchedQuestions")
+  createdCategories  Category[]               @relation("CategoryAuthor")
+  resources          Resource[] // Tài liệu tham khảo do user tạo
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// Question Entity
+model Question {
+  id             String         @id @default(uuid())
+  title          String
+  content        String
+  status         QuestionStatus @default(OPEN)
+  approvalStatus ApprovalStatus @default(PENDING)
+  isAnonymous    Boolean        @default(false) // Đặt câu hỏi ẩn danh (sinh viên không thấy tên, nhưng CVHT/Admin vẫn thấy)
+
+  // Relations
+  authorId      String
+  author        User               @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  categoryId    String // Keep for backward compatibility (primary category)
+  category      Category           @relation(fields: [categoryId], references: [id])
+  categories    QuestionCategory[] // Many-to-many relation for multiple categories
+  tags          QuestionTag[]
+  answers       Answer[]
+  comments      Comment[]
+  votes         Vote[]
+  questionViews QuestionView[]
+  messages      QuestionMessage[]
+  watchers      QuestionWatcher[]
+
+  // Metadata
+  acceptedAnswerId String?
+  duplicateOfId    String?
+  rejectionReason  String? // Lý do từ chối (nếu bị reject)
+  embedding        Unsupported("vector(768)")? // Vector embedding for similarity search (Gemini: 768 dimensions, OpenAI: 1536 dimensions)
+  views            Int                         @default(0)
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  @@index([authorId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([approvalStatus])
+  @@index([createdAt])
+  @@map("questions")
+}
+
+// Answer Entity
+model Answer {
+  id         String  @id @default(uuid())
+  content    String
+  isPinned   Boolean @default(false)
+  isTopVoted Boolean @default(false)
+
+  // Edit history (like Messenger)
+  editCount       Int       @default(0) // Number of times edited (max 1)
+  originalContent String? // Store original content before first edit
+  editedAt        DateTime? // When it was edited
+
+  // Relations
+  authorId   String
+  author     User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  comments   Comment[]
+  votes      Vote[]
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId])
+  @@index([questionId])
+  @@index([isPinned])
+  @@index([isTopVoted])
+  @@map("answers")
+}
+
+// Comment Entity
+model Comment {
+  id      String @id @default(uuid())
+  content String
+
+  // Relations
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Polymorphic relations (comment on Question or Answer)
+  questionId String?
+  question   Question? @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerId   String?
+  answer     Answer?   @relation(fields: [answerId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId])
+  @@index([questionId])
+  @@index([answerId])
+  @@map("comments")
+}
+
+// Vote Entity (Upvote/Downvote)
+model Vote {
+  id   String   @id @default(uuid())
+  type VoteType
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Polymorphic relations (vote on Question or Answer)
+  questionId String?
+  question   Question? @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerId   String?
+  answer     Answer?   @relation(fields: [answerId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  createdAt DateTime @default(now())
+
+  @@unique([userId, questionId])
+  @@unique([userId, answerId])
+  @@index([userId])
+  @@index([questionId])
+  @@index([answerId])
+  @@map("votes")
+}
+
+enum CategoryType {
+  SYSTEM // Danh mục hệ thống (Học vụ, Đăng ký môn, Đồ án...)
+  ACADEMIC // Danh mục học thuật (web-development, database, breadth-first-search...)
+}
+
+enum CategoryApprovalStatus {
+  PENDING // Đang chờ duyệt (chỉ cho danh mục học thuật)
+  APPROVED // Đã được duyệt
+  REJECTED // Bị từ chối
+}
+
+// Category Entity (Danh mục: Học vụ, Đăng ký môn, Đồ án...)
+model Category {
+  id             String                 @id @default(uuid())
+  name           String                 @unique
+  description    String?
+  slug           String                 @unique
+  type           CategoryType           @default(SYSTEM)
+  approvalStatus CategoryApprovalStatus @default(APPROVED) // SYSTEM categories are auto-approved
+
+  // Author (optional - only for ACADEMIC categories created by users)
+  authorId String?
+  author   User?   @relation("CategoryAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  // Relations
+  questions          Question[] // Primary category relation (backward compatibility)
+  questionCategories QuestionCategory[] @relation("QuestionCategories") // Many-to-many relation
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([approvalStatus])
+  @@index([authorId])
+  @@map("categories")
+}
+
+// Tag Entity
+model Tag {
+  id   String @id @default(uuid())
+  name String @unique
+  slug String @unique
+
+  // Relations
+  questions QuestionTag[]
+
+  // Metadata
+  createdAt DateTime @default(now())
+
+  @@map("tags")
+}
+
+// QuestionTag - Many-to-Many relation table
+model QuestionTag {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  tagId      String
+  tag        Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([questionId, tagId])
+  @@index([questionId])
+  @@index([tagId])
+  @@map("question_tags")
+}
+
+// QuestionCategory - Many-to-many relation between Question and Category
+model QuestionCategory {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   Category @relation("QuestionCategories", fields: [categoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([questionId, categoryId])
+  @@index([questionId])
+  @@index([categoryId])
+  @@map("question_categories")
+}
+
+// Notification Entity
+model Notification {
+  id      String    @id @default(uuid())
+  type    String
+  title   String
+  content String
+  isRead  Boolean   @default(false)
+  readAt  DateTime?
+  link    String?
+  meta    Json?
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Link to related entity
+  questionId String?
+  answerId   String?
+
+  // Metadata
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// QuestionView Entity - Track which users have viewed which questions
+model QuestionView {
+  id String @id @default(uuid())
+
+  // Relations
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  createdAt DateTime @default(now())
+
+  @@unique([userId, questionId])
+  @@index([userId])
+  @@index([questionId])
+  @@map("question_views")
+}
+
+// QuestionMessage - block-style message per question (chat-like)
+model QuestionMessage {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  senderId   String
+  sender     User     @relation("UserSentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  content    Json // Editor.js blocks or rich content JSON
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  receipts QuestionMessageReceipt[]
+
+  @@index([questionId, createdAt])
+  @@index([senderId, createdAt])
+  @@map("question_messages")
+}
+
+// Receipts for delivered/seen per user per message
+model QuestionMessageReceipt {
+  id          String          @id @default(uuid())
+  messageId   String
+  message     QuestionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User            @relation("UserMessageReceipts", fields: [userId], references: [id], onDelete: Cascade)
+  deliveredAt DateTime?
+  seenAt      DateTime?
+  createdAt   DateTime        @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId, messageId])
+  @@map("question_message_receipts")
+}
+
+// Notification tokens (FCM) per user/device
+model NotificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fcmToken  String
+  userAgent String?
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@unique([fcmToken])
+  @@index([userId, createdAt])
+  @@index([userId, revokedAt])
+  @@map("notification_tokens")
+}
+
+// Question Watcher - Users who are watching/following a question
+model QuestionWatcher {
+  id         String   @id @default(uuid())
+  questionId String
+  userId     String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user       User     @relation("UserWatchedQuestions", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([questionId, userId], name: "questionId_userId")
+  @@index([questionId])
+  @@index([userId])
+  @@map("question_watchers")
+}
+
+// Resource Entity - Tài liệu tham khảo
+model Resource {
+  id          String       @id @default(uuid())
+  title       String // Tiêu đề tài liệu
+  description String? // Mô tả
+  type        ResourceType // Loại: LINK, FILE, DOCUMENT
+  url         String // URL (link hoặc cloudinary URL)
+  fileName    String? // Tên file gốc (nếu upload)
+  fileSize    Int? // Kích thước file (bytes)
+  mimeType    String? // Loại file (application/pdf, image/png, etc.)
+
+  // Relations
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Metadata
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([authorId])
+  @@index([type])
+  @@index([isPublished])
+  @@index([createdAt])
+  @@map("resources")
+}
+
+// Enum definitions
+
+enum ResourceType {
+  LINK // Link/URL từ nguồn khác
+  FILE // File upload (Cloudinary)
+  DOCUMENT // Tài liệu PDF, Word, etc.
+}
+
+enum UserRole {
+  STUDENT
+  ADVISOR
+  ADMIN
+}
+
+enum QuestionStatus {
+  OPEN
+  ANSWERED
+  CLOSED
+  DUPLICATE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum VoteType {
+  UPVOTE
+  DOWNVOTE
+}
