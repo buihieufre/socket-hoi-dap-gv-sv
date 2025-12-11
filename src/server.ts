@@ -42,6 +42,17 @@ app.use(
 
 app.use(express.json());
 
+// Set no-cache headers for all HTTP responses
+app.use((req, res, next) => {
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate"
+  );
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -88,6 +99,13 @@ const io = new SocketIOServer(httpServer, {
   path: "/socket.io",
   cors: corsConfig,
   transports: ["websocket", "polling"],
+});
+
+// Monkey patch no-cache headers for socket.io handshake responses
+io.engine.on("initial_headers", (headers: Record<string, string>) => {
+  headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate";
+  headers["Pragma"] = "no-cache";
+  headers["Expires"] = "0";
 });
 
 // Setup socket handlers
